@@ -1,10 +1,5 @@
 import OpenAI from 'openai';
-
-export interface LLMConfig {
-  apiKey?: string;
-  baseURL?: string;
-  model?: string;
-}
+import type { LLMConfig } from './types.js';
 
 /**
  * Zentis LLM Client

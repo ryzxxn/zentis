@@ -16,6 +16,12 @@ export interface UIComponent {
   props: Record<string, any>;
 }
 
+export interface UIAction {
+  type: 'highlight' | 'click' | 'focus' | 'scroll' | 'custom';
+  targetId?: string;
+  metadata?: Record<string, any>;
+}
+
 export interface MemoryItem {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string | null;
@@ -34,6 +40,12 @@ export interface IMemoryStorage {
 
 export type StorageType = 'local' | 'session' | 'sqlite' | 'postgres' | 'indexeddb';
 
+export interface LLMConfig {
+  apiKey?: string;
+  baseURL?: string;
+  model?: string;
+}
+
 export interface StorageConfig {
   type: StorageType;
   userId?: string;
@@ -49,4 +61,5 @@ export interface StorageConfig {
 export interface AgentResponse {
   text: string;
   components: UIComponent[];
+  actions: UIAction[];
 }

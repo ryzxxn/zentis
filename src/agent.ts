@@ -1,9 +1,16 @@
 import { ZentisMcpClient } from './client.js';
 import { ZentisMemory } from './memory.js';
-import { ZentisLlmClient, type LLMConfig } from './llm.js';
+import { ZentisLlmClient } from './llm.js';
 import { BrowserStorage, SQLiteStorage, PostgresStorage, IndexedDBStorage } from './lib/storage/index.js';
 import type OpenAI from 'openai';
-import type { AgentResponse, UIComponent, StorageConfig } from './types.js';
+import type { AgentResponse, UIComponent, UIAction, StorageConfig, LLMConfig } from './types.js';
+
+export interface ZentisAgentOptions {
+  client?: ZentisMcpClient;
+  memory?: ZentisMemory;
+  llm?: ZentisLlmClient | LLMConfig;
+  storage?: StorageConfig;
+}
 
 /**
  * Zentis Agent
@@ -14,12 +21,7 @@ export class ZentisAgent {
   public memory: ZentisMemory;
   public llm?: ZentisLlmClient;
 
-  constructor(options: { 
-    client?: ZentisMcpClient; 
-    memory?: ZentisMemory;
-    llm?: ZentisLlmClient | LLMConfig;
-    storage?: StorageConfig;
-  } = {}) {
+  constructor(options: ZentisAgentOptions = {}) {
     this.client = options.client || ZentisMcpClient.getInstance();
     this.memory = options.memory || ZentisMemory.getInstance();
     
@@ -148,24 +150,40 @@ export class ZentisAgent {
   }
 
   /**
-   * Internal helper to parse UI components from text
-   * Syntax: [UI:ComponentName]{"json":"data"}[/UI]
+   * Internal helper to parse UI components and actions from text
+   * Syntax: 
+   * [UI:ComponentName]{"json":"data"}[/UI]
+   * [ACTION:Type]{"targetId": "id", "metadata": {}}[/ACTION]
    */
-  private parseComponents(text: string): { cleanText: string; components: UIComponent[] } {
+  private parseResponse(text: string): { cleanText: string; components: UIComponent[]; actions: UIAction[] } {
     const components: UIComponent[] = [];
-    const regex = /\[UI:(\w+)\]([\s\S]*?)\[\/UI\]/g;
+    const actions: UIAction[] = [];
     
-    let cleanText = text.replace(regex, (match, name, jsonStr) => {
+    // Parse Components
+    const compRegex = /\[UI:(\w+)\]([\s\S]*?)\[\/UI\]/g;
+    let cleanText = text.replace(compRegex, (match, name, jsonStr) => {
       try {
         const props = JSON.parse(jsonStr.trim());
         components.push({ name, props });
       } catch (e) {
         console.error(`Failed to parse UI component ${name}:`, e);
       }
-      return ""; // Remove from text
+      return ""; 
+    });
+
+    // Parse Actions
+    const actionRegex = /\[ACTION:(\w+)\]([\s\S]*?)\[\/ACTION\]/g;
+    cleanText = cleanText.replace(actionRegex, (match, type, jsonStr) => {
+      try {
+        const data = JSON.parse(jsonStr.trim());
+        actions.push({ type: type.toLowerCase() as any, ...data });
+      } catch (e) {
+        console.error(`Failed to parse UI action ${type}:`, e);
+      }
+      return "";
     }).trim();
 
-    return { cleanText, components };
+    return { cleanText, components, actions };
   }
 
   /**
@@ -228,7 +246,17 @@ UI CAPABILITIES:
   - "Chart": props { "type": "bar"|"line", "data": array, "className": string }
   - "Table": props { "headers": string[], "rows": any[][], "title": string, "className": string }
 - Example: "Here is the footage: [UI:VideoPlayer]{\"url\": \"https://...\", \"title\": \"Camera 1\", \"className\": \"rounded-xl border-2 border-blue-500 shadow-lg\"}[/UI]"
-- You can use any standard Tailwind CSS classes for layout, borders, spacing, and colors.`
+- You can use any standard Tailwind CSS classes for layout, borders, spacing, and colors.
+
+UI ACTIONS (WEB API):
+- You can interact with existing elements or newly rendered components.
+- Syntax: [ACTION:Type]{"targetId": "element-id", "metadata": { "key": "val" }}[/ACTION]
+- Available Actions:
+  - "highlight": Highlights a specific component or text block.
+  - "click": Simulates a click on a button or link.
+  - "focus": Sets focus to an input field.
+  - "scroll": Scrolls an element into view.
+- Example: "I have highlighted the relevant row for you. [ACTION:highlight]{\"targetId\": \"row-5\"}[/ACTION]"`
       },
       ...history
         .filter(h => h.role !== 'system') 
@@ -303,14 +331,14 @@ UI CAPABILITIES:
 
         loopCount++;
       } else {
-        // Final answer - parse UI components
+        // Final answer - parse UI components and actions
         const rawText = message.content || "";
-        const { cleanText, components } = this.parseComponents(rawText);
+        const { cleanText, components, actions } = this.parseResponse(rawText);
         
-        return { text: cleanText, components };
+        return { text: cleanText, components, actions };
       }
     }
 
-    return { text: "I've reached my maximum reasoning limit for this query.", components: [] };
+    return { text: "I've reached my maximum reasoning limit for this query.", components: [], actions: [] };
   }
 }

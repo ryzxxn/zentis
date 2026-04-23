@@ -31,7 +31,7 @@ import { ZentisAgent, ZentisMcpClient } from 'zentis';
 // 1. Initialize Agent with LLM config & storage
 const agent = new ZentisAgent({
   llm: { 
-    apiKey: process.env.ZEN_API_KEY,
+    apiKey: process.env.ZEN_API_KEY, // Or GROQ_API_KEY, OPENAI_API_KEY
     baseURL: 'https://api.groq.com/openai/v1',
     model: 'llama-3.1-70b-versatile'
   },
@@ -43,7 +43,9 @@ const client = ZentisMcpClient.getInstance();
 await client.connect('primary', 'http://localhost:8001/sse');
 
 // 3. Query the agent
-const response = await agent.query("Add 56 and 25 using your tools.");
+const response = await agent.query("Add 56 and 25 using your tools.", {
+  onAction: (action) => console.log(`Running ${action.tool} on ${action.server}...`)
+});
 console.log(response.text);
 
 // Optional: Override model for a specific query
@@ -74,6 +76,8 @@ The `agent.query()` method doesn't just call a model; it implements a **multi-tu
 - It provides the tools to the LLM.
 - It executes tool calls (including parallel calls) and feeds results back to the model.
 - It repeats until the model provides a final answer.
+
+> **Tip**: Use the `onAction` option to listen for tool executions in real-time.
 
 ### 3. Smart Memory & Notes
 Zentis maintains a message history and a "notes stack" for persistent context.
@@ -142,7 +146,29 @@ const response = await agent.query("Show me the map of London");
 
 // response.text -> "Here is the map you requested:"
 // response.components -> [{ name: "Map", props: { lat: 51.5, lng: -0.12 } }]
+// response.actions -> []
 ```
+
+## UI Actions (Web API)
+Zentis allows the agent to interact with the frontend by triggering specific actions like highlighting, clicking, or focusing elements.
+
+### Syntax
+`[ACTION:Type]{"targetId": "element-id", "metadata": {}}[/ACTION]`
+
+### Example
+```typescript
+const response = await agent.query("Highlight the submit button");
+
+// response.actions -> [{ type: "highlight", targetId: "submit-btn" }]
+```
+
+### Supported Actions
+- **highlight**: Focus attention on a specific element.
+- **click**: Trigger a programmatic click.
+- **focus**: Set focus to an input field.
+- **scroll**: Scroll an element into view.
+- **custom**: Pass arbitrary events to your frontend.
+
 
 ### Supported Default Components
 - **VideoPlayer**: `{ "url": string, "title": string, "className": string }`
