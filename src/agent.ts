@@ -1,7 +1,9 @@
 import { ZentisMcpClient } from './client.js';
 import { ZentisMemory } from './memory.js';
-import { ZentisLlmClient } from './llm.js';
+import { ZentisLlmClient, type LLMConfig } from './llm.js';
+import { BrowserStorage, SQLiteStorage, PostgresStorage, IndexedDBStorage } from './lib/storage/index.js';
 import type OpenAI from 'openai';
+import type { AgentResponse, UIComponent, StorageConfig } from './types.js';
 
 /**
  * Zentis Agent
@@ -15,25 +17,64 @@ export class ZentisAgent {
   constructor(options: { 
     client?: ZentisMcpClient; 
     memory?: ZentisMemory;
-    llm?: ZentisLlmClient;
+    llm?: ZentisLlmClient | LLMConfig;
+    storage?: StorageConfig;
   } = {}) {
     this.client = options.client || ZentisMcpClient.getInstance();
     this.memory = options.memory || ZentisMemory.getInstance();
-    this.llm = options.llm;
+    
+    if (options.llm instanceof ZentisLlmClient) {
+      this.llm = options.llm;
+    } else if (options.llm) {
+      this.llm = new ZentisLlmClient(options.llm);
+    }
+
+    if (options.storage) {
+      this.configureStorage(options.storage);
+    }
+  }
+
+  /**
+   * Internal helper to configure storage based on config object
+   */
+  private configureStorage(config: StorageConfig) {
+    let storage;
+    const userId = config.userId || 'default';
+
+    switch (config.type) {
+      case 'local':
+      case 'session':
+        storage = new BrowserStorage(config.type, config.keyPrefix);
+        break;
+      case 'sqlite':
+        storage = new SQLiteStorage(config.connectionString || 'zentis.db');
+        break;
+      case 'postgres':
+        if (!config.connectionString) throw new Error('Postgres requires connectionString');
+        storage = new PostgresStorage(config.connectionString);
+        break;
+      case 'indexeddb':
+        storage = new IndexedDBStorage(config.dbName, config.storeName);
+        break;
+      default:
+        throw new Error(`Unsupported storage type: ${config.type}`);
+    }
+
+    this.memory.setStorage(storage, userId);
   }
 
   /**
    * Push a note onto the agent's internal stack (supports string, number, object, array)
    */
-  note(content: any): void {
-    this.memory.addNote(content);
+  async note(content: any): Promise<void> {
+    await this.memory.addNote(content);
   }
 
   /**
    * Pop the most recent note from the stack
    */
-  popNote(): string | undefined {
-    return this.memory.popNote();
+  async popNote(): Promise<string | undefined> {
+    return await this.memory.popNote();
   }
 
   /**
@@ -46,15 +87,22 @@ export class ZentisAgent {
   /**
    * Add a message to the agent's memory
    */
-  remember(role: any, content: string | null, extra?: { metadata?: Record<string, any>; tool_calls?: any[]; tool_call_id?: string }): void {
-    this.memory.addMessage(role, content, extra);
+  async remember(role: any, content: string | null, extra?: { metadata?: Record<string, any>; tool_calls?: any[]; tool_call_id?: string }): Promise<void> {
+    await this.memory.addMessage(role, content, extra);
   }
 
   /**
    * Retrieve relevant context from memory
    */
-  recall(limit: number = 10) {
-    return this.memory.getHistory(limit);
+  async recall(limit: number = 10) {
+    return await this.memory.getHistory(limit);
+  }
+
+  /**
+   * Clear the agent's memory (history and notes)
+   */
+  async clearMemory(): Promise<void> {
+    await this.memory.clear();
   }
 
   /**
@@ -68,15 +116,15 @@ export class ZentisAgent {
    * Execute a tool and store the interaction in memory
    */
   async executeTool(serverName: string, toolName: string, args: Record<string, any>, toolCallId?: string) {
-    this.memory.addMessage('system', `Calling tool "${toolName}" on server "${serverName}"`, { metadata: { toolName, serverName, args } });
+    await this.memory.addMessage('system', `Calling tool "${toolName}" on server "${serverName}"`, { metadata: { toolName, serverName, args } });
     
     try {
       const result = await this.client.callTool(serverName, toolName, args);
-      this.memory.addMessage('tool', JSON.stringify(result), { tool_call_id: toolCallId });
+      await this.memory.addMessage('tool', JSON.stringify(result), { tool_call_id: toolCallId });
       return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.memory.addMessage('system', `Tool execution failed: ${errorMessage}`, { metadata: { toolName, serverName, error } });
+      await this.memory.addMessage('system', `Tool execution failed: ${errorMessage}`, { metadata: { toolName, serverName, error } });
       throw error;
     }
   }
@@ -86,17 +134,38 @@ export class ZentisAgent {
    */
   async executeToolsParallel(calls: { serverName: string; toolName: string; args: Record<string, any>; toolCallId?: string }[]) {
     const promises = calls.map(async (call) => {
-      this.memory.addMessage('system', `Parallel call: ${call.toolName} on ${call.serverName}`, { metadata: { ...call.args } });
+      await this.memory.addMessage('system', `Parallel call: ${call.toolName} on ${call.serverName}`, { metadata: { ...call.args } });
       try {
         const result = await this.client.callTool(call.serverName, call.toolName, call.args);
-        this.memory.addMessage('tool', JSON.stringify(result), { tool_call_id: call.toolCallId });
+        await this.memory.addMessage('tool', JSON.stringify(result), { tool_call_id: call.toolCallId });
         return { ...call, result };
       } catch (error) {
-        this.memory.addMessage('system', `Parallel call failed: ${call.toolName}`, { metadata: { error } });
+        await this.memory.addMessage('system', `Parallel call failed: ${call.toolName}`, { metadata: { error } });
         throw error;
       }
     });
     return await Promise.all(promises);
+  }
+
+  /**
+   * Internal helper to parse UI components from text
+   * Syntax: [UI:ComponentName]{"json":"data"}[/UI]
+   */
+  private parseComponents(text: string): { cleanText: string; components: UIComponent[] } {
+    const components: UIComponent[] = [];
+    const regex = /\[UI:(\w+)\]([\s\S]*?)\[\/UI\]/g;
+    
+    let cleanText = text.replace(regex, (match, name, jsonStr) => {
+      try {
+        const props = JSON.parse(jsonStr.trim());
+        components.push({ name, props });
+      } catch (e) {
+        console.error(`Failed to parse UI component ${name}:`, e);
+      }
+      return ""; // Remove from text
+    }).trim();
+
+    return { cleanText, components };
   }
 
   /**
@@ -105,8 +174,11 @@ export class ZentisAgent {
    */
   async query(
     userMessage: string, 
-    options: { onAction?: (action: { tool: string; args: any; server: string }) => void } = {}
-  ): Promise<string> {
+    options: { 
+      onAction?: (action: { tool: string; args: any; server: string }) => void;
+      model?: string;
+    } = {}
+  ): Promise<AgentResponse> {
     if (!this.llm) {
       throw new Error("Agent: Cannot perform query without an LLM client.");
     }
@@ -131,7 +203,7 @@ export class ZentisAgent {
     }
 
     // 2. Prepare messages from history
-    const history = this.memory.getHistory(15);
+    const history = await this.memory.getHistory(15);
     const notes = this.getNotes();
     
     const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
@@ -144,12 +216,22 @@ ${notes.length > 0 ? notes.join('\n') : 'No specific notes.'}
 Instructions:
 - Use tools to answer factual questions or perform actions.
 - If a tool is available, ALWAYS use it instead of guessing.
-- Multiple tools can be called at once if needed.
 - Keep responses conversational and direct.
-- Never mention internal technical IDs unless asked.`
+- Never mention internal technical IDs unless asked.
+
+UI CAPABILITIES:
+- You can trigger specific UI components to be rendered on the user's browser.
+- Use the syntax: [UI:ComponentName]{"prop1": "value", "className": "tailwind classes"}[/UI]
+- Available components: 
+  - "VideoPlayer": props { "url": string, "title": string, "className": string }
+  - "Map": props { "lat": number, "lng": number, "zoom": number, "className": string }
+  - "Chart": props { "type": "bar"|"line", "data": array, "className": string }
+  - "Table": props { "headers": string[], "rows": any[][], "title": string, "className": string }
+- Example: "Here is the footage: [UI:VideoPlayer]{\"url\": \"https://...\", \"title\": \"Camera 1\", \"className\": \"rounded-xl border-2 border-blue-500 shadow-lg\"}[/UI]"
+- You can use any standard Tailwind CSS classes for layout, borders, spacing, and colors.`
       },
       ...history
-        .filter(h => h.role !== 'system') // Skip internal system logs for the LLM context
+        .filter(h => h.role !== 'system') 
         .map(h => {
           const msg: any = { role: h.role, content: h.content };
           if (h.tool_calls) msg.tool_calls = h.tool_calls;
@@ -159,27 +241,26 @@ Instructions:
     ];
 
     messages.push({ role: 'user', content: userMessage });
-    this.memory.addMessage('user', userMessage);
+    await this.memory.addMessage('user', userMessage);
 
     let loopCount = 0;
-    const maxLoops = 10; // Increased loop limit for smarter reasoning
+    const maxLoops = 10; 
 
     while (loopCount < maxLoops) {
       const response = await this.llm.chat({
         messages,
         tools: availableTools.length > 0 ? availableTools : undefined,
-        tool_choice: availableTools.length > 0 ? 'auto' : undefined
+        tool_choice: availableTools.length > 0 ? 'auto' : undefined,
+        model: options.model
       });
 
       const message = response.choices[0]?.message;
       if (!message) break;
 
-      // Store assistant message with its tool calls if any
-      this.memory.addMessage('assistant', message.content, { tool_calls: message.tool_calls });
+      await this.memory.addMessage('assistant', message.content, { tool_calls: message.tool_calls });
       messages.push(message);
 
       if (message.tool_calls && message.tool_calls.length > 0) {
-        // Execute all tool calls in this turn in parallel
         const toolPromises = message.tool_calls.map(async (toolCall) => {
           if (toolCall.type !== 'function') return null;
 
@@ -195,7 +276,6 @@ Instructions:
             };
           }
 
-          // Trigger action callback if provided
           if (options.onAction) {
             options.onAction({ tool: toolName, args, server: serverName });
           }
@@ -223,18 +303,14 @@ Instructions:
 
         loopCount++;
       } else {
-        // No more tool calls, final answer received
-        return message.content || "";
+        // Final answer - parse UI components
+        const rawText = message.content || "";
+        const { cleanText, components } = this.parseComponents(rawText);
+        
+        return { text: cleanText, components };
       }
     }
 
-    return "I've reached my maximum reasoning limit for this query.";
-  }
-
-  /**
-   * Clear agent memory
-   */
-  clearMemory(): void {
-    this.memory.clear();
+    return { text: "I've reached my maximum reasoning limit for this query.", components: [] };
   }
 }

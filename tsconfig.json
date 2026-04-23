@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "NodeNext",
-    "lib": ["ES2020", "ESNext.AsyncIterable"],
+    "lib": ["ES2020", "ESNext.AsyncIterable", "dom"],
     "types": ["node"],
     "declaration": true,
     "declarationMap": true,

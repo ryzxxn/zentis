@@ -15,15 +15,16 @@ export class ZentisLlmClient {
   public defaultModel: string;
 
   constructor(config: LLMConfig) {
-    const apiKey = config.apiKey || process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY;
+    const env = typeof process !== 'undefined' ? process.env : {};
+    const apiKey = config.apiKey || (env as any).ZEN_API_KEY || (env as any).GROQ_API_KEY || (env as any).OPENAI_API_KEY || (env as any).OPENROUTER_API_KEY;
     
     if (!apiKey) {
-      throw new Error("ZentisLlmClient: apiKey must be provided in config or via environment variables (GROQ_API_KEY or OPENAI_API_KEY)");
+      throw new Error("ZentisLlmClient: apiKey must be provided in config or via environment variables");
     }
 
     this.openai = new OpenAI({
       apiKey,
-      baseURL: config.baseURL, // No longer assuming Groq by default if not provided
+      baseURL: config.baseURL, 
       dangerouslyAllowBrowser: true 
     });
     this.defaultModel = config.model || "llama-3.1-8b-instant";

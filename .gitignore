@@ -142,3 +142,4 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 query.ts
 demo.ts
+index.html
