@@ -1,17 +1,15 @@
 import OpenAI from 'openai';
 import type { LLMConfig } from './types.js';
 
-/**
- * Zentis LLM Client
- * Wrapper around OpenAI SDK for easy integration with various providers (Groq, OpenAI, etc.)
- */
 export class ZentisLlmClient {
   public openai: OpenAI;
   public defaultModel: string;
 
   constructor(config: LLMConfig) {
     const env = typeof process !== 'undefined' ? process.env : {};
-    const apiKey = config.apiKey || (env as any).ZEN_API_KEY || (env as any).GROQ_API_KEY || (env as any).OPENAI_API_KEY || (env as any).OPENROUTER_API_KEY;
+    const apiKey = config.apiKey || (env as any).ZEN_API_KEY || (env as any).GEMINI_API_KEY || (env as any).GROQ_API_KEY || (env as any).OPENAI_API_KEY || (env as any).OPENROUTER_API_KEY;
+    const baseURL = config.baseURL || (env as any).ZEN_BASE_URL;
+    const model = config.model || (env as any).ZEN_MODEL || "llama-3.1-8b-instant";
     
     if (!apiKey) {
       throw new Error("ZentisLlmClient: apiKey must be provided in config or via environment variables");
@@ -19,32 +17,51 @@ export class ZentisLlmClient {
 
     this.openai = new OpenAI({
       apiKey,
-      baseURL: config.baseURL, 
+      baseURL: baseURL, 
       dangerouslyAllowBrowser: true 
     });
-    this.defaultModel = config.model || "llama-3.1-8b-instant";
+    this.defaultModel = model;
   }
 
-  /**
-   * Standard chat completion with support for tools
-   */
   async chat(options: { 
     messages: OpenAI.Chat.ChatCompletionMessageParam[]; 
-    tools?: OpenAI.Chat.ChatCompletionTool[];
-    tool_choice?: OpenAI.Chat.ChatCompletionToolChoiceOption;
     model?: string;
   }) {
-    return await this.openai.chat.completions.create({
-      messages: options.messages,
-      tools: options.tools,
-      tool_choice: options.tool_choice,
+    const messages = this.prepareMessages(options.messages);
+    
+    const payload = {
       model: options.model || this.defaultModel,
+      messages,
+      // Intentionally NOT passing tools or tool_choice to force prompt-based execution
+    };
+
+    console.log('\n[Zentis:LLM] Sending Payload:', JSON.stringify(payload, null, 2));
+
+    const response = await this.openai.chat.completions.create(payload);
+
+    console.log('\n[Zentis:LLM] Raw Response Received:', JSON.stringify(response, null, 2));
+    return response;
+  }
+
+  private prepareMessages(messages: OpenAI.Chat.ChatCompletionMessageParam[]): OpenAI.Chat.ChatCompletionMessageParam[] {
+    return messages.map(msg => {
+      const normalized = { ...msg };
+      
+      // Ensure pure text communication
+      if (typeof normalized.content !== 'string') {
+        normalized.content = String(normalized.content || "");
+      }
+
+      // Clean up internal properties that shouldn't go to the LLM API
+      delete (normalized as any).component;
+      delete (normalized as any).metadata;
+      delete (normalized as any).timestamp;
+      delete (normalized as any).extra_content;
+
+      return normalized;
     });
   }
 
-  /**
-   * Proxy to allow user's requested syntax: client.responses.create()
-   */
   get responses() {
     return {
       create: async (options: { model?: string; input: string }) => {
@@ -59,9 +76,6 @@ export class ZentisLlmClient {
     };
   }
 
-  /**
-   * Test the LLM connection
-   */
   async testConnection(options: { model?: string; input: string }) {
     return await this.responses.create(options);
   }

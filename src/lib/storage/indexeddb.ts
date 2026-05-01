@@ -26,7 +26,7 @@ export class IndexedDBStorage implements IMemoryStorage {
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
         if (!db.objectStoreNames.contains(this.storeName)) {
-          db.createObjectStore(this.storeName, { keyPath: 'userId' });
+          db.createObjectStore(this.storeName, { keyPath: ['userId', 'sessionId'] });
         }
       };
 
@@ -41,28 +41,28 @@ export class IndexedDBStorage implements IMemoryStorage {
     });
   }
 
-  async saveMessage(userId: string, item: MemoryItem): Promise<void> {
+  async saveMessage(userId: string, item: MemoryItem, sessionId: string = 'default'): Promise<void> {
     const db = await this.getDB();
-    const history = await this.getHistory(userId);
+    const history = await this.getHistory(userId, undefined, sessionId);
     history.push(item);
 
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
-      const request = store.put({ userId, messages: history, updatedAt: Date.now() });
+      const request = store.put({ userId, sessionId, messages: history, updatedAt: Date.now() });
 
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
     });
   }
 
-  async getHistory(userId: string, limit?: number): Promise<MemoryItem[]> {
+  async getHistory(userId: string, limit?: number, sessionId: string = 'default'): Promise<MemoryItem[]> {
     const db = await this.getDB();
 
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([this.storeName], 'readonly');
       const store = transaction.objectStore(this.storeName);
-      const request = store.get(userId);
+      const request = store.get([userId, sessionId]);
 
       request.onsuccess = () => {
         const result = request.result;
@@ -78,13 +78,13 @@ export class IndexedDBStorage implements IMemoryStorage {
     });
   }
 
-  async clear(userId: string): Promise<void> {
+  async clear(userId: string, sessionId: string = 'default'): Promise<void> {
     const db = await this.getDB();
 
     return new Promise((resolve, reject) => {
       const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
-      const request = store.delete(userId);
+      const request = store.delete([userId, sessionId]);
 
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);

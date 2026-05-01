@@ -143,3 +143,4 @@ vite.config.ts.timestamp-*
 query.ts
 demo.ts
 index.html
+zentis_query.db

@@ -10,6 +10,7 @@ export class ZentisMemory {
   public notes: string[] = [];
   private storage?: IMemoryStorage;
   private userId: string = 'default';
+  private sessionId: string = 'default';
 
   private constructor() {}
 
@@ -21,11 +22,12 @@ export class ZentisMemory {
   }
 
   /**
-   * Configure storage backend and user context
+   * Configure storage backend and user session
    */
-  public setStorage(storage: IMemoryStorage, userId: string = 'default'): void {
+  public setStorage(storage: IMemoryStorage, userId: string = 'default', sessionId: string = 'default'): void {
     this.storage = storage;
     this.userId = userId;
+    this.sessionId = sessionId;
   }
 
   /**
@@ -33,6 +35,13 @@ export class ZentisMemory {
    */
   public setUserId(userId: string): void {
     this.userId = userId;
+  }
+
+  /**
+   * Set the current session ID for scoped memory
+   */
+  public setSessionId(sessionId: string): void {
+    this.sessionId = sessionId;
   }
 
   async addMessage(
@@ -52,7 +61,7 @@ export class ZentisMemory {
     this.history.push(item);
 
     if (this.storage) {
-      await this.storage.saveMessage(this.userId, item);
+      await this.storage.saveMessage(this.userId, item, this.sessionId);
     }
   }
 
@@ -72,7 +81,7 @@ export class ZentisMemory {
 
   async getHistory(limit: number = 10): Promise<MemoryItem[]> {
     if (this.storage) {
-      return await this.storage.getHistory(this.userId, limit);
+      return await this.storage.getHistory(this.userId, limit, this.sessionId);
     }
     return this.history.slice(-limit);
   }
@@ -81,7 +90,7 @@ export class ZentisMemory {
     this.history = [];
     this.notes = [];
     if (this.storage) {
-      await this.storage.clear(this.userId);
+      await this.storage.clear(this.userId, this.sessionId);
     }
   }
 }

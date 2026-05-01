@@ -12,14 +12,14 @@ export class BrowserStorage implements IMemoryStorage {
     this.keyPrefix = keyPrefix;
   }
 
-  async saveMessage(userId: string, item: MemoryItem): Promise<void> {
-    const history = await this.getHistory(userId);
+  async saveMessage(userId: string, item: MemoryItem, sessionId: string = 'default'): Promise<void> {
+    const history = await this.getHistory(userId, undefined, sessionId);
     history.push(item);
-    this.storage.setItem(`${this.keyPrefix}${userId}`, JSON.stringify(history));
+    this.storage.setItem(`${this.keyPrefix}${userId}_${sessionId}`, JSON.stringify(history));
   }
 
-  async getHistory(userId: string, limit?: number): Promise<MemoryItem[]> {
-    const data = this.storage.getItem(`${this.keyPrefix}${userId}`);
+  async getHistory(userId: string, limit?: number, sessionId: string = 'default'): Promise<MemoryItem[]> {
+    const data = this.storage.getItem(`${this.keyPrefix}${userId}_${sessionId}`);
     if (!data) return [];
     try {
       const history = JSON.parse(data) as MemoryItem[];
@@ -29,7 +29,7 @@ export class BrowserStorage implements IMemoryStorage {
     }
   }
 
-  async clear(userId: string): Promise<void> {
-    this.storage.removeItem(`${this.keyPrefix}${userId}`);
+  async clear(userId: string, sessionId: string = 'default'): Promise<void> {
+    this.storage.removeItem(`${this.keyPrefix}${userId}_${sessionId}`);
   }
 }

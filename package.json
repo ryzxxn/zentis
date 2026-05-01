@@ -1,10 +1,16 @@
 {
   "name": "zentis",
-  "version": "1.0.3",
+  "version": "1.1.11",
   "description": "A high-level agentic framework for Model Context Protocol (MCP) with memory and LLM integration.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "browser": {
+    "./src/lib/storage/factory.js": "./src/lib/storage/factory.browser.ts",
+    "./src/lib/storage/sqlite.js": false,
+    "./src/lib/storage/postgres.js": false,
+    "module": false,
+    "better-sqlite3": false,
+    "pg": false,
     "child_process": false,
     "fs": false,
     "path": false,
@@ -25,7 +31,7 @@
   "scripts": {
     "clean": "rimraf dist",
     "build": "npm run clean && tsc && npm run bundle",
-    "bundle": "esbuild src/browser.ts --bundle --outfile=dist/zentis.bundle.js --format=iife --platform=browser --define:process.env.GROQ_API_KEY=\\\"\\\" --alias:node:process=process --alias:node:stream=stream-browserify --alias:child_process=process --alias:path=path-browserify --alias:fs=process --alias:eventsource=eventsource --alias:events=events --alias:buffer=buffer --external:pg --external:better-sqlite3 --external:util --external:net --external:tls --external:dns --external:fs --external:path --external:os",
+    "bundle": "esbuild src/browser.ts --bundle --outfile=dist/zentis.bundle.js --format=iife --platform=browser --define:process.env.GROQ_API_KEY=\\\"\\\" --alias:node:process=process --alias:node:stream=stream-browserify --alias:child_process=process --alias:path=path-browserify --alias:fs=process --alias:eventsource=eventsource --alias:events=events --alias:buffer=buffer --external:pg --external:better-sqlite3 --external:util --external:net --external:tls --external:dns --external:fs --external:path --external:os --external:module",
     "demo": "tsx demo.ts",
     "chat": "tsx query.ts",
     "prepublishOnly": "npm run build"

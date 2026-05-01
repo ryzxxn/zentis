@@ -48,9 +48,18 @@ export class ZentisMcpClient {
     try {
       let transport;
       if (options.transportType === 'http') {
-        transport = new StreamableHTTPClientTransport(new URL(url));
+        const transportParams: any = {};
+        if (options.headers) {
+          transportParams.requestInit = { headers: options.headers };
+        }
+        transport = new StreamableHTTPClientTransport(new URL(url), transportParams);
       } else {
-        transport = new SSEClientTransport(new URL(url));
+        const transportParams: any = {};
+        if (options.headers) {
+          transportParams.requestInit = { headers: options.headers };
+          transportParams.eventSourceInit = { headers: options.headers };
+        }
+        transport = new SSEClientTransport(new URL(url), transportParams);
       }
 
       await client.connect(transport);
@@ -119,21 +128,27 @@ export class ZentisMcpClient {
    * @param serverName The name of the server where the tool is located
    * @param toolName The name of the tool to call
    * @param args Arguments for the tool call
+   * @param extraArgs Optional sensitive extra arguments (e.g. tokens) that should not be logged
    */
   async callTool(
     serverName: string, 
     toolName: string, 
-    args: Record<string, any> = {}
+    args: Record<string, any> = {},
+    extraArgs: Record<string, any> = {}
   ): Promise<CallToolResult> {
     const server = this.servers.get(serverName);
     if (!server) {
       throw new Error(`Server "${serverName}" not found. Connect it first.`);
     }
 
-    return await server.client.callTool({
+    const finalArgs = { ...args, ...extraArgs };
+    console.log(`[Zentis:MCP] Calling "${toolName}" on "${serverName}" with:`, JSON.stringify(finalArgs, null, 2));
+    const result = await server.client.callTool({
       name: toolName,
-      arguments: args
+      arguments: finalArgs
     });
+    console.log(`[Zentis:MCP] Result from "${toolName}":`, JSON.stringify(result, null, 2));
+    return result;
   }
 
   /**

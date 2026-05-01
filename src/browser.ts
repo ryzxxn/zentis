@@ -1,7 +1,8 @@
 import { ZentisAgent } from './agent.js';
 import { ZentisLlmClient } from './llm.js';
 import { ZentisMcpClient } from './client.js';
-import { BrowserStorage, IndexedDBStorage } from './lib/storage/index.js';
+import { BrowserStorage } from './lib/storage/browser.js';
+import { IndexedDBStorage } from './lib/storage/indexeddb.js';
 
 // Browser shims for Node.js built-ins
 if (typeof window !== 'undefined') {
