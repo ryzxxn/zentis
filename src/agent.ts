@@ -132,8 +132,8 @@ export class ZentisAgent {
       try {
         const props = JSON.parse(jsonStr.trim());
         
-        // Smarter Results: If props has a data/dataSource/devices/rows field pointing to a session result, swap it
-        const dataKeys = ['data', 'dataSource', 'devices', 'rows', 'items', 'forecast'];
+        // Smarter Results: If props has a data/dataSource/records/rows field pointing to a session result, swap it
+        const dataKeys = ['data', 'dataSource', 'records', 'rows', 'items', 'forecast'];
         for (const key of dataKeys) {
           const val = props[key];
           if (typeof val === 'string' && sessionResults[val]) {

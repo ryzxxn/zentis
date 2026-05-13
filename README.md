@@ -49,7 +49,7 @@ const agent = new ZentisAgent({
 
   // MCP Servers
   mcp: [
-    { name: 'Weather', url: 'https://mcp-weather.example.com/sse' },
+    { name: 'Analytics', url: 'https://mcp-analytics.example.com/sse' },
     { name: 'Database', url: 'http://localhost:3001/mcp' }
   ]
 });
@@ -77,15 +77,15 @@ const ui = new ZentisUI();
 
 // Register a custom component
 ui.register({
-  name: 'WeatherCard',
-  description: 'Display current weather and forecast.',
+  name: 'SalesChart',
+  description: 'Display sales trends and forecasts.',
   props: {
-    location: { type: 'string', description: 'City name', required: true },
-    temperature: { type: 'number', description: 'Current temp in Celsius' },
-    isRainy: { type: 'boolean', description: 'Whether it is raining' },
+    region: { type: 'string', description: 'Region name', required: true },
+    revenue: { type: 'number', description: 'Current revenue' },
+    isProfitable: { type: 'boolean', description: 'Whether the region is profitable' },
     forecast: { 
       type: 'data_reference', 
-      description: 'Reference to the forecast data list from a tool' 
+      description: 'Reference to the sales forecast data list from a tool' 
     },
     filters: {
       type: 'object',
@@ -99,7 +99,7 @@ const agent = new ZentisAgent({ ui, ... });
 
 #### Property Types
 - `string`, `number`, `boolean`, `array`, `object`: Standard JSON types.
-- `data_reference`: **Crucial for performance.** This tells the LLM to provide a Result ID (e.g., `res_1_get_weather`) instead of the raw data. Zentis will automatically swap this ID for the actual data before returning the response to your frontend.
+- `data_reference`: **Crucial for performance.** This tells the LLM to provide a Result ID (e.g., `res_1_get_sales`) instead of the raw data. Zentis will automatically swap this ID for the actual data before returning the response to your frontend.
 
 ### 2. Usage in React (Frontend side)
 
@@ -111,14 +111,14 @@ import { AgentResponse } from 'zentis';
 
 // Example UI Component Map
 const ComponentMap = {
-  WeatherCard: ({ location, temperature, forecast }: any) => (
+  SalesChart: ({ region, revenue, forecast }: any) => (
     <div className="p-4 border rounded shadow">
-      <h2>Weather in {location}</h2>
-      <p className="text-2xl font-bold">{temperature}°C</p>
+      <h2>Sales in {region}</h2>
+      <p className="text-2xl font-bold">${revenue}</p>
       {forecast && (
         <ul className="mt-2 text-sm">
           {forecast.map((f: any, i: number) => (
-            <li key={i}>{f.day}: {f.temp}°C</li>
+            <li key={i}>{f.period}: ${f.amount}</li>
           ))}
         </ul>
       )}
@@ -212,7 +212,7 @@ const agent = new ZentisAgent({
 // ALWAYS call waitReady() before querying to ensure all MCP servers are connected
 await agent.waitReady();
 
-const response = await agent.query("Check the status of the front yard camera", {
+const response = await agent.query("Check the status of the inventory levels", {
   onStep: (step) => {
     console.log(`[${step.type}] ${step.message}`);
     if (step.data) console.log('Data:', step.data);
@@ -310,11 +310,11 @@ Zentis avoids "library bloat" by not injecting any hardcoded identity, instructi
 
 ```typescript
 // Define Identity
-await agent.note("You are a helpful Security Assistant named Sentinel."); 
-await agent.note("You have access to the Sherlock MCP server.");
+await agent.note("You are a helpful Personal Assistant named Zen."); 
+await agent.note("You have access to the primary MCP server.");
 
 // Define Operational Rules
-await agent.note("If multiple cameras are found, always list their status in a [UI:Table].");
+await agent.note("If multiple records are found, always list their status in a [UI:Table].");
 await agent.note("ALWAYS respond in a professional tone.");
 
 // The agent's core 'system prompt' is built from these notes.
@@ -331,7 +331,7 @@ await agent.note("Before using any tools, explain your plan to the user briefly.
 Zentis allows you to pass custom arguments (like auth tokens or session IDs) directly to your tools without exposing them to the LLM. These are passed via the `extraArgs` option in the `query` method.
 
 ```typescript
-const response = await agent.query("Get my cameras", {
+const response = await agent.query("Get my records", {
   extraArgs: {
     API_auth: "eyJhbGciOi...", // Hidden from LLM
     nodeId: 101
