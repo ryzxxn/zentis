@@ -12,6 +12,16 @@ export interface ConnectionOptions {
   onNotification?: (notification: any) => void;
 }
 
+export interface UIComponentDefinition {
+  name: string;
+  description: string;
+  props: Record<string, {
+    type: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'data_reference';
+    description: string;
+    required?: boolean;
+  }>;
+}
+
 export interface UIComponent {
   name: string;
   props: Record<string, any>;
@@ -23,13 +33,20 @@ export interface UIAction {
   metadata?: Record<string, any>;
 }
 
+export interface ToolInteraction {
+  id: string;
+  tool: string;
+  args: Record<string, any>;
+  result: any;
+  timestamp: number;
+}
+
 export interface MemoryItem {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string | null;
   metadata?: Record<string, any>;
   tool_calls?: any[]; 
   tool_call_id?: string;
-  component?: UIComponent; // New: optional UI component data
   timestamp: number;
 }
 
@@ -37,9 +54,10 @@ export interface IMemoryStorage {
   saveMessage(userId: string, item: MemoryItem, sessionId?: string): Promise<void>;
   getHistory(userId: string, limit?: number, sessionId?: string): Promise<MemoryItem[]>;
   clear(userId: string, sessionId?: string): Promise<void>;
+  close?(): Promise<void>;
 }
 
-export type StorageType = 'local' | 'session' | 'sqlite' | 'postgres' | 'indexeddb';
+export type StorageType = 'sqlite' | 'postgres';
 
 export interface LLMConfig {
   apiKey?: string;
@@ -61,17 +79,18 @@ export interface StorageConfig {
   connectionString?: string; 
   ssl?: any;
   pool?: any; // Pre-configured PG pool instance
-  // For browser storage
-  keyPrefix?: string;
-  // For indexeddb
-  dbName?: string;
-  storeName?: string;
 }
 
 export interface AgentResponse {
   text: string;
   components: UIComponent[];
   actions: UIAction[];
+  /** Full, un-truncated results from tool calls in this session */
+  results?: Record<string, any>;
+  /** The primary data result of the query, if identifiable */
+  mainResult?: any;
+  /** Audit log of tool interactions */
+  interactions?: ToolInteraction[];
 }
 
 export interface QueryOptions {

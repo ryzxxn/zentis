@@ -35,11 +35,8 @@ export class ZentisLlmClient {
       // Intentionally NOT passing tools or tool_choice to force prompt-based execution
     };
 
-    console.log('\n[Zentis:LLM] Sending Payload:', JSON.stringify(payload, null, 2));
-
     const response = await this.openai.chat.completions.create(payload);
 
-    console.log('\n[Zentis:LLM] Raw Response Received:', JSON.stringify(response, null, 2));
     return response;
   }
 

@@ -10,11 +10,14 @@ import type { ServerConnection, ConnectionOptions } from './types.js';
 export class ZentisMcpClient {
   private static instance: ZentisMcpClient;
   private servers: Map<string, ServerConnection> = new Map();
+  private toolsCache: Map<string, { tools: ListToolsResult['tools']; timestamp: number }> = new Map();
+  private CACHE_TTL = 30000; // 30 seconds
 
-  private constructor() {}
+  constructor() {}
 
   /**
    * Get the singleton instance of ZentisMcpClient
+   * @deprecated Use new ZentisMcpClient() for isolated instances
    */
   public static getInstance(): ZentisMcpClient {
     if (!ZentisMcpClient.instance) {
@@ -45,6 +48,16 @@ export class ZentisMcpClient {
       client.setNotificationHandler('notifications/message', options.onNotification);
     }
 
+    // Close existing connection if it exists for this name to prevent memory leak
+    const existing = this.servers.get(name);
+    if (existing) {
+      try {
+        await existing.transport.close();
+      } catch (e) {
+        // Ignore close errors
+      }
+    }
+
     try {
       let transport;
       if (options.transportType === 'http') {
@@ -64,6 +77,7 @@ export class ZentisMcpClient {
 
       await client.connect(transport);
       this.servers.set(name, { client, transport });
+      this.toolsCache.delete(name); // Invalidate cache on new connection
       return true;
     } catch (error) {
       if (!options.silent) {
@@ -95,23 +109,54 @@ export class ZentisMcpClient {
   /**
    * List tools available on one or all connected servers
    * @param serverName Optional specific server to list tools from
+   * @param forceRefresh Ignore cache and fetch fresh tool list
    * @returns A map of server names to their available tools
    */
-  async listTools(serverName?: string): Promise<Record<string, ListToolsResult['tools']>> {
+  async listTools(serverName?: string, forceRefresh: boolean = false): Promise<Record<string, ListToolsResult['tools']>> {
     const results: Record<string, ListToolsResult['tools']> = {};
+    const timeoutMs = 10000;
+
+    const fetchWithTimeout = async (name: string, client: Client) => {
+      // Check cache first
+      if (!forceRefresh) {
+        const cached = this.toolsCache.get(name);
+        if (cached && (Date.now() - cached.timestamp < this.CACHE_TTL)) {
+          return cached.tools;
+        }
+      }
+
+      let timeoutId: any;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error(`listTools for ${name} timed out`)), timeoutMs);
+      });
+      try {
+        const response = await Promise.race([
+          client.listTools(),
+          timeoutPromise
+        ]);
+        const tools = (response as ListToolsResult).tools;
+        this.toolsCache.set(name, { tools, timestamp: Date.now() });
+        return tools;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
 
     if (serverName) {
       const server = this.servers.get(serverName);
       if (!server) {
         throw new Error(`Server "${serverName}" not found. Connect it first.`);
       }
-      const response = await server.client.listTools();
-      results[serverName] = response.tools;
+      try {
+        results[serverName] = await fetchWithTimeout(serverName, server.client);
+      } catch (error) {
+        console.error(`Failed to list tools for server ${serverName}:`, error);
+        results[serverName] = [];
+      }
     } else {
       const promises = Array.from(this.servers.entries()).map(async ([name, server]) => {
         try {
-          const response = await server.client.listTools();
-          results[name] = response.tools;
+          results[name] = await fetchWithTimeout(name, server.client);
         } catch (error) {
           console.error(`Failed to list tools for server ${name}:`, error);
           results[name] = [];
@@ -142,13 +187,26 @@ export class ZentisMcpClient {
     }
 
     const finalArgs = { ...args, ...extraArgs };
-    console.log(`[Zentis:MCP] Calling "${toolName}" on "${serverName}" with:`, JSON.stringify(finalArgs, null, 2));
-    const result = await server.client.callTool({
-      name: toolName,
-      arguments: finalArgs
+    
+    // Add a timeout to tool calls to prevent hanging queries from leaking memory
+    const timeoutMs = 30000;
+    let timeoutId: any;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(`Tool call to ${toolName} timed out after ${timeoutMs}ms`)), timeoutMs);
     });
-    console.log(`[Zentis:MCP] Result from "${toolName}":`, JSON.stringify(result, null, 2));
-    return result;
+
+    try {
+      const result = await Promise.race([
+        server.client.callTool({
+          name: toolName,
+          arguments: finalArgs
+        }),
+        timeoutPromise
+      ]);
+      return result as CallToolResult;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   /**

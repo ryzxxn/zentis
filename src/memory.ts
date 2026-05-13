@@ -11,8 +11,10 @@ export class ZentisMemory {
   private storage?: IMemoryStorage;
   private userId: string = 'default';
   private sessionId: string = 'default';
+  private maxHistorySize: number = 1000;
+  private maxNotesSize: number = 100;
 
-  private constructor() {}
+  constructor() {}
 
   public static getInstance(): ZentisMemory {
     if (!ZentisMemory.instance) {
@@ -24,10 +26,21 @@ export class ZentisMemory {
   /**
    * Configure storage backend and user session
    */
-  public setStorage(storage: IMemoryStorage, userId: string = 'default', sessionId: string = 'default'): void {
+  public async setStorage(storage: IMemoryStorage, userId: string = 'default', sessionId: string = 'default'): Promise<void> {
+    // Close existing storage to prevent leaks
+    if (this.storage?.close) {
+      await this.storage.close();
+    }
     this.storage = storage;
     this.userId = userId;
     this.sessionId = sessionId;
+  }
+
+  /**
+   * Set the maximum number of items to keep in memory history
+   */
+  public setMaxHistorySize(size: number): void {
+    this.maxHistorySize = size;
   }
 
   /**
@@ -59,6 +72,11 @@ export class ZentisMemory {
     };
 
     this.history.push(item);
+    
+    // Evict old messages if history exceeds capacity
+    if (this.history.length > this.maxHistorySize) {
+      this.history = this.history.slice(-this.maxHistorySize);
+    }
 
     if (this.storage) {
       await this.storage.saveMessage(this.userId, item, this.sessionId);
@@ -68,6 +86,12 @@ export class ZentisMemory {
   async addNote(content: any): Promise<void> {
     const stringified = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
     this.notes.push(stringified);
+
+    // Evict old notes if notes exceed capacity
+    if (this.notes.length > this.maxNotesSize) {
+      this.notes.shift();
+    }
+
     await this.addMessage('system', `Note added: ${stringified}`);
   }
 
@@ -91,6 +115,15 @@ export class ZentisMemory {
     this.notes = [];
     if (this.storage) {
       await this.storage.clear(this.userId, this.sessionId);
+    }
+  }
+
+  /**
+   * Close storage connections
+   */
+  async close(): Promise<void> {
+    if (this.storage?.close) {
+      await this.storage.close();
     }
   }
 }

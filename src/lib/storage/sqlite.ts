@@ -40,13 +40,16 @@ export class SQLiteStorage implements IMemoryStorage {
     const history = await this.getHistory(userId, undefined, sessionId);
     history.push(item);
     
+    // Prune history to avoid massive JSON payloads (limit to last 1000 messages)
+    const prunedHistory = history.slice(-1000);
+    
     this.db.prepare(`
       INSERT INTO zentis_history (user_id, session_id, messages, updated_at)
       VALUES (?, ?, ?, ?)
       ON CONFLICT(user_id, session_id) DO UPDATE SET
         messages = excluded.messages,
         updated_at = excluded.updated_at
-    `).run(userId, sessionId, JSON.stringify(history), Date.now());
+    `).run(userId, sessionId, JSON.stringify(prunedHistory), Date.now());
   }
 
   async getHistory(userId: string, limit?: number, sessionId: string = 'default'): Promise<MemoryItem[]> {
@@ -63,5 +66,11 @@ export class SQLiteStorage implements IMemoryStorage {
 
   async clear(userId: string, sessionId: string = 'default'): Promise<void> {
     this.db.prepare('DELETE FROM zentis_history WHERE user_id = ? AND session_id = ?').run(userId, sessionId);
+  }
+
+  async close(): Promise<void> {
+    if (this.db) {
+      this.db.close();
+    }
   }
 }

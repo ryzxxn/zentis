@@ -9,6 +9,7 @@ const require = createRequire(import.meta.url);
  */
 export class PostgresStorage implements IMemoryStorage {
   private pool: any;
+  private ownPool: boolean = false;
 
   constructor(config: string | { connectionString?: string; pool?: any; ssl?: any }) {
     if (typeof config === 'object' && config.pool) {
@@ -26,6 +27,7 @@ export class PostgresStorage implements IMemoryStorage {
         connectionString,
         ssl: ssl || false
       });
+      this.ownPool = true;
       this.init();
     } catch (e) {
       throw new Error('PostgresStorage requires "pg" package. Please install it.');
@@ -48,13 +50,16 @@ export class PostgresStorage implements IMemoryStorage {
     const history = await this.getHistory(userId, undefined, sessionId);
     history.push(item);
     
+    // Prune history to avoid massive JSON payloads (limit to last 1000 messages)
+    const prunedHistory = history.slice(-1000);
+    
     await this.pool.query(`
       INSERT INTO zentis_history (user_id, session_id, messages, updated_at)
       VALUES ($1, $2, $3, $4)
       ON CONFLICT (user_id, session_id) DO UPDATE SET
         messages = EXCLUDED.messages,
         updated_at = EXCLUDED.updated_at
-    `, [userId, sessionId, JSON.stringify(history), Date.now()]);
+    `, [userId, sessionId, JSON.stringify(prunedHistory), Date.now()]);
   }
 
   async getHistory(userId: string, limit?: number, sessionId: string = 'default'): Promise<MemoryItem[]> {
@@ -67,5 +72,11 @@ export class PostgresStorage implements IMemoryStorage {
 
   async clear(userId: string, sessionId: string = 'default'): Promise<void> {
     await this.pool.query('DELETE FROM zentis_history WHERE user_id = $1 AND session_id = $2', [userId, sessionId]);
+  }
+
+  async close(): Promise<void> {
+    if (this.pool && this.ownPool) {
+      await this.pool.end();
+    }
   }
 }
