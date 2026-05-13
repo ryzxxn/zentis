@@ -4,7 +4,7 @@ import { ZentisLlmClient } from './llm.js';
 import { ZentisUI } from './ui.js';
 import { createStorage } from './lib/storage/factory.js';
 import type OpenAI from 'openai';
-import type { AgentResponse, UIComponent, UIAction, StorageConfig, LLMConfig, QueryOptions, McpServerConfig, ToolInteraction } from './types.js';
+import type { AgentResponse, UIComponent, StorageConfig, LLMConfig, QueryOptions, McpServerConfig, ToolInteraction } from './types.js';
 
 export interface ZentisAgentOptions {
   client?: ZentisMcpClient;
@@ -15,6 +15,7 @@ export interface ZentisAgentOptions {
   mcp?: McpServerConfig | McpServerConfig[];
   tool_router?: boolean; 
   planner?: boolean;
+  maxTurns?: number;
   maxHistoryMessages?: number; 
 }
 
@@ -24,7 +25,7 @@ export class ZentisAgent {
   public ui: ZentisUI;
   public llm?: ZentisLlmClient;
   public mcpConfig?: McpServerConfig | McpServerConfig[];
-  public options: { tool_router: boolean; planner: boolean; maxHistoryMessages: number };
+  public options: { tool_router: boolean; planner: boolean; maxTurns: number; maxHistoryMessages: number };
   private readyPromise: Promise<void> = Promise.resolve();
 
   constructor(options: ZentisAgentOptions = {}) {
@@ -35,6 +36,7 @@ export class ZentisAgent {
     this.options = {
       tool_router: options.tool_router ?? false,
       planner: options.planner ?? false,
+      maxTurns: Math.min(Math.max(options.maxTurns ?? 10, 1), 50),
       maxHistoryMessages: options.maxHistoryMessages ?? 20
     };
     
@@ -121,9 +123,8 @@ export class ZentisAgent {
     return await this.client.listTools();
   }
 
-  private parseResponse(text: string, sessionResults: Record<string, any> = {}): { cleanText: string; components: UIComponent[]; actions: UIAction[] } {
+  private parseResponse(text: string, sessionResults: Record<string, any> = {}): { cleanText: string; components: UIComponent[] } {
     const components: UIComponent[] = [];
-    const actions: UIAction[] = [];
     
     // 1. Extract and remove UI components
     const compRegex = /\[UI:(\w+)\]([\s\S]*?)\[\/UI\]/g;
@@ -147,20 +148,9 @@ export class ZentisAgent {
       return ""; 
     });
 
-    // 2. Extract and remove UI actions
-    const actionRegex = /\[ACTION:(\w+)\]([\s\S]*?)\[\/ACTION\]/g;
-    cleanText = cleanText.replace(actionRegex, (match, type, jsonStr) => {
-      try {
-        const data = JSON.parse(jsonStr.trim());
-        actions.push({ type: type.toLowerCase() as any, ...data });
-      } catch (e) {
-        console.error(`Failed to parse UI action ${type}:`, e);
-      }
-      return "";
-    });
-
-    // 3. Final cleanup of ALL internal Zentis-style tags and artifacts
+    // 2. Final cleanup of ALL internal Zentis-style tags and artifacts
     cleanText = cleanText
+      .replace(/\[ACTION:(\w+)\]([\s\S]*?)\[\/ACTION\]/g, "") // Remove actions if they appear in text
       .replace(/\[CALL:[^\]]+\][\s\S]*?(\[\/CALL\]|$)/gi, "")
       .replace(/\[RESULT:[^\]]+\][\s\S]*?(\[\/RESULT\]|$)/gi, "")
       .replace(/\[DATA_REFERENCE\][\s\S]*?(\[\/DATA_REFERENCE\]|$)/gi, "")
@@ -170,7 +160,7 @@ export class ZentisAgent {
       .replace(/\n{3,}/g, "\n\n") // Remove excessive whitespace
       .trim();
 
-    return { cleanText, components, actions };
+    return { cleanText, components };
   }
 
   async query(
@@ -195,17 +185,22 @@ export class ZentisAgent {
 
     const mcpToolsMap = await this.client.listTools();
     const toolToManagerMap: Record<string, string> = {}; 
+    const allToolsList: any[] = [];
     let allToolDescriptions = "";
     
     for (const [serverName, tools] of Object.entries(mcpToolsMap)) {
       for (const tool of tools) {
+        allToolsList.push({ ...tool, serverName });
         const schema = JSON.stringify(tool.inputSchema?.properties || {});
         allToolDescriptions += `- ${tool.name}: ${tool.description} | Args: ${schema}\n`;
+        toolToManagerMap[tool.name] = serverName; // Map ALL tools
       }
     }
 
     let toolPlan = "";
     let allowedTools: Set<string> | null = null;
+    const TOOL_LIMIT = 20;
+    const useSearchTool = allToolsList.length > TOOL_LIMIT && !this.options.planner && !this.options.tool_router;
 
     if (this.options.planner) {
       if (options.onStep) {
@@ -215,7 +210,8 @@ export class ZentisAgent {
       const plannerResponse = await this.llm.chat({
         messages: [
           { role: 'system', content: `You are a Tool Planner. Given a user query and a set of tools, identify the exact sequence of tools needed.
-Output ONLY the names of the tools in a comma-separated list, or "NONE" if no tools are needed.
+Output a JSON array of tool names, or ["NONE"] if no tools are needed.
+Be thorough but concise.
 
 TOOLS:
 ${allToolDescriptions}` },
@@ -224,37 +220,55 @@ ${allToolDescriptions}` },
       });
 
       const planRaw = plannerResponse.choices[0]?.message?.content || "";
-      if (planRaw && !planRaw.includes("NONE")) {
+      try {
+        const jsonMatch = planRaw.match(/\[.*\]/s);
+        const toolsInPlan = jsonMatch ? JSON.parse(jsonMatch[0]) : planRaw.split(',').map((t: string) => t.trim());
+        
+        if (toolsInPlan.length > 0 && toolsInPlan[0] !== "NONE") {
+          allowedTools = new Set(toolsInPlan.map((t: string) => t.toLowerCase()));
+          toolPlan = `TOOL PLAN: ${toolsInPlan.join(', ')}`;
+        }
+      } catch (e) {
+        // Fallback to comma separation
         const toolsInPlan = planRaw.split(',').map(t => t.trim().toLowerCase());
-        allowedTools = new Set(toolsInPlan);
-        toolPlan = `TOOL PLAN: ${planRaw}`;
+        if (toolsInPlan.length > 0 && toolsInPlan[0] !== "none") {
+          allowedTools = new Set(toolsInPlan);
+          toolPlan = `TOOL PLAN: ${planRaw}`;
+        }
       }
     }
 
     let toolDescriptions = "";
-    const keywords = this.options.tool_router ? userMessage.toLowerCase().split(/\s+/) : [];
+    const keywords = (this.options.tool_router || useSearchTool) ? userMessage.toLowerCase().split(/[\s,._-]+/) : [];
 
-    for (const [serverName, tools] of Object.entries(mcpToolsMap)) {
-      for (const tool of tools) {
-        if (allowedTools) {
-          if (!allowedTools.has(tool.name.toLowerCase())) continue;
-        } else if (this.options.tool_router) {
-          const content = (tool.name + " " + tool.description).toLowerCase();
-          const matches = keywords.some(k => k.length > 2 && content.includes(k));
-          if (!matches) continue;
-        }
+    if (useSearchTool) {
+      toolDescriptions += `- search_tools: Search for tools matching a specific query. Use this if you need a tool that is not in the list. | Args: {"query": "string"}\n`;
+    }
 
-        const properties = { ...(tool.inputSchema?.properties || {}) };
-        if (options.extraArgs) {
-          for (const key of Object.keys(options.extraArgs)) {
-            delete properties[key];
-          }
-        }
-        
-        const schema = JSON.stringify(properties);
-        toolDescriptions += `- ${tool.name}: ${tool.description} | Args: ${schema}\n`;
-        toolToManagerMap[tool.name] = serverName;
+    for (const tool of allToolsList) {
+      if (allowedTools) {
+        if (!allowedTools.has(tool.name.toLowerCase())) continue;
+      } else if (this.options.tool_router) {
+        const content = (tool.name + " " + tool.description).toLowerCase();
+        // Enhanced router: check for any keyword match or partial match
+        const matches = keywords.some(k => k.length > 2 && (content.includes(k) || k.includes(tool.name.toLowerCase())));
+        if (!matches) continue;
+      } else if (useSearchTool) {
+        // If we are using the search tool, only show a few core tools or matches
+        const content = (tool.name + " " + tool.description).toLowerCase();
+        const matches = keywords.some(k => k.length > 3 && content.includes(k));
+        if (!matches) continue;
       }
+
+      const properties = { ...(tool.inputSchema?.properties || {}) };
+      if (options.extraArgs) {
+        for (const key of Object.keys(options.extraArgs)) {
+          delete properties[key];
+        }
+      }
+      
+      const schema = JSON.stringify(properties);
+      toolDescriptions += `- ${tool.name}: ${tool.description} | Args: ${schema}\n`;
     }
 
     const toolInstructions = toolDescriptions.length > 0 ? `
@@ -291,7 +305,7 @@ TO CALL TOOLS:
     await this.memory.addMessage('user', userMessage);
 
     let loopCount = 0;
-    const maxLoops = 10; 
+    const maxLoops = Math.min(Math.max(options.maxTurns ?? this.options.maxTurns, 1), 50); 
 
     while (loopCount < maxLoops) {
       if (options.onStep) {
@@ -363,7 +377,25 @@ TO CALL TOOLS:
           }
 
           let resultContent = "";
-          if (!serverName) {
+          
+          // Handle Internal/Virtual Tools (like search_tools)
+          if (toolName === 'search_tools') {
+            const query = args.query?.toLowerCase() || "";
+            const matches = allToolsList.filter(t => 
+              t.name.toLowerCase().includes(query) || 
+              t.description.toLowerCase().includes(query)
+            );
+            
+            if (matches.length === 0) {
+              resultContent = `No tools found matching "${query}". Try a broader search.`;
+            } else {
+              resultContent = "Found the following tools matching your search. You can now use them in the next turn:\n";
+              for (const t of matches) {
+                const schema = JSON.stringify(t.inputSchema?.properties || {});
+                resultContent += `- ${t.name}: ${t.description} | Args: ${schema}\n`;
+              }
+            }
+          } else if (!serverName) {
             resultContent = `{"error": "Tool '${toolName}' does not exist."}`;
           } else {
             try {
@@ -415,17 +447,16 @@ You can apply "filters" (key-value pairs) or "columns" (array of strings) to the
         loopCount++;
 
       } else {
-        const { cleanText, components, actions } = this.parseResponse(messageContent, sessionResults);
+        const { cleanText, components } = this.parseResponse(messageContent, sessionResults);
         await this.memory.addMessage('assistant', messageContent);
 
         if (options.onStep) {
-          options.onStep({ type: 'complete', message: 'Final response generated', data: { components, actions } });
+          options.onStep({ type: 'complete', message: 'Final response generated', data: { components } });
         }
 
         return { 
           text: cleanText, 
           components, 
-          actions, 
           results: sessionResults,
           interactions,
           mainResult: Object.values(sessionResults).pop() 
@@ -433,6 +464,6 @@ You can apply "filters" (key-value pairs) or "columns" (array of strings) to the
       }
     }
 
-    return { text: "I apologize, but I reached the maximum number of reasoning steps.", components: [], actions: [] };
+    return { text: "I apologize, but I reached the maximum number of reasoning steps.", components: [] };
   }
 }

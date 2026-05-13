@@ -27,12 +27,6 @@ export interface UIComponent {
   props: Record<string, any>;
 }
 
-export interface UIAction {
-  type: 'highlight' | 'click' | 'focus' | 'scroll' | 'custom';
-  targetId?: string;
-  metadata?: Record<string, any>;
-}
-
 export interface ToolInteraction {
   id: string;
   tool: string;
@@ -84,7 +78,6 @@ export interface StorageConfig {
 export interface AgentResponse {
   text: string;
   components: UIComponent[];
-  actions: UIAction[];
   /** Full, un-truncated results from tool calls in this session */
   results?: Record<string, any>;
   /** The primary data result of the query, if identifiable */
@@ -105,6 +98,7 @@ export interface QueryOptions {
   model?: string;
   maxHistoryChars?: number; // Proxy for tokens
   maxHistoryMessages?: number; // Number of messages to include
+  maxTurns?: number;
   skipUIInstructions?: boolean;
   /** Extra arguments passed to tools but not shown to the LLM (e.g. auth tokens) */
   extraArgs?: Record<string, any>;
